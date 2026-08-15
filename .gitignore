@@ -1,0 +1,6 @@
+Thumbs.db
+Desktop.ini
+*.log
+applied-cidrs.txt
+.vscode/
+.idea/
