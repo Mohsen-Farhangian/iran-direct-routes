@@ -1,13 +1,14 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-  Send Iranian IPv4 prefixes through the local LAN gateway so they skip SoftEther VPN.
+  Send Iranian IPv4 prefixes through the local LAN gateway so they skip any full-tunnel VPN.
 
 .DESCRIPTION
-  SoftEther VPN Client has no "bypass Iran" option. When the VPN is connected, Windows
+  When a VPN (SoftEther, OpenVPN, WireGuard, AnyConnect, etc.) is connected, Windows
   typically has a default route via the VPN adapter. This script downloads announced
   Iran IPv4 prefixes and adds more-specific routes via the physical LAN/Wi-Fi gateway.
-  Foreign traffic keeps using the VPN default route.
+  Foreign traffic keeps using the VPN default route. Works on the Windows routing table;
+  it does not change the VPN app itself.
 
 .PARAMETER Action
   Apply          Add Iran-direct routes (download fresh prefix list).
@@ -29,10 +30,13 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$StateDir = Join-Path $env:LOCALAPPDATA 'SoftEtherIranBypass'
+$StateDir = Join-Path $env:LOCALAPPDATA 'IranDirectRoutes'
+$LegacyStateDir = Join-Path $env:LOCALAPPDATA 'SoftEtherIranBypass'
 $StateFile = Join-Path $StateDir 'applied-cidrs.txt'
+$LegacyStateFile = Join-Path $LegacyStateDir 'applied-cidrs.txt'
 $ListUrl = 'https://raw.githubusercontent.com/farshidmousavii/iran-ip-ranges/main/dist/raw/ipv4.txt'
-$TaskName = 'SoftEther Iran Direct Routes'
+$TaskName = 'Iran Direct Routes'
+$LegacyTaskName = 'SoftEther Iran Direct Routes'
 
 function Test-Admin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -122,12 +126,19 @@ function Invoke-Apply {
     Write-Host "LAN gateway: $gw"
 }
 
+function Get-AppliedStateFile {
+    if (Test-Path $StateFile) { return $StateFile }
+    if (Test-Path $LegacyStateFile) { return $LegacyStateFile }
+    return $null
+}
+
 function Invoke-Remove {
-    if (-not (Test-Path $StateFile)) {
+    $file = Get-AppliedStateFile
+    if (-not $file) {
         Write-Host "No applied-route list found. Nothing to remove."
         return
     }
-    $cidrs = Get-Content $StateFile | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$' }
+    $cidrs = Get-Content $file | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$' }
     $n = 0
     $ok = 0
     foreach ($cidr in $cidrs) {
@@ -138,7 +149,7 @@ function Invoke-Remove {
         & route.exe delete $ip mask $mask | Out-Null
         if ($LASTEXITCODE -eq 0) { $ok++ }
     }
-    Remove-Item $StateFile -Force -ErrorAction SilentlyContinue
+    Remove-Item $file -Force -ErrorAction SilentlyContinue
     Write-Host "Removed $ok routes."
 }
 
@@ -150,12 +161,14 @@ function Invoke-InstallTask {
     $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $t1 -Principal $principal -Settings $settings -Force | Out-Null
+    Unregister-ScheduledTask -TaskName $LegacyTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Write-Host "Scheduled task '$TaskName' installed (runs at logon as admin)."
-    Write-Host "After you connect SoftEther, wait a few seconds or run Apply again if needed."
+    Write-Host "After you connect the VPN, wait a few seconds or run Apply again if needed."
 }
 
 function Invoke-UninstallTask {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName $LegacyTaskName -Confirm:$false -ErrorAction SilentlyContinue
     Write-Host "Scheduled task '$TaskName' removed."
 }
 
@@ -168,8 +181,9 @@ function Invoke-Status {
     Write-Host "LAN gateway : $gw"
     Write-Host "Default routes:"
     $defaults | Format-Table DestinationPrefix, NextHop, InterfaceAlias, RouteMetric -AutoSize | Out-String | Write-Host
-    if (Test-Path $StateFile) {
-        $c = (Get-Content $StateFile).Count
+    $file = Get-AppliedStateFile
+    if ($file) {
+        $c = (Get-Content $file).Count
         Write-Host "Applied Iran prefixes on file: $c"
     } else {
         Write-Host "No Iran-direct routes recorded yet."

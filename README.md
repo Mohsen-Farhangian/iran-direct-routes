@@ -1,10 +1,12 @@
-# SoftEther Iran Direct Routes
+# Iran Direct Routes
 
-Split-tunnel helper for **SoftEther VPN Client Manager** on Windows: Iranian IPv4 destinations use your local ISP/LAN; everything else stays on the VPN.
+Split-tunnel helper for **any full-tunnel VPN on Windows**: Iranian IPv4 destinations use your local ISP/LAN; everything else stays on the VPN.
+
+ابزار split-tunnel برای **هر VPN تمام‌تونل روی ویندوز**: مقصدهای IPv4 ایرانی از اینترنت محلی می‌روند؛ بقیه ترافیک روی VPN می‌ماند.
 
 [فارسی](#فارسی) · [English](#english)
 
-SoftEther VPN Client Manager has no “bypass Iran” checkbox. This project adds more-specific Windows routes for announced Iranian prefixes so they win over the VPN default route (`0.0.0.0/0`).
+This is **not** limited to SoftEther. It works with SoftEther, OpenVPN, WireGuard, Cisco AnyConnect, and similar clients that take over the Windows default route (`0.0.0.0/0`). Clash / v2ray / sing-box already have their own `geosite:ir` / Direct rules — use those instead of this script.
 
 ---
 
@@ -12,12 +14,14 @@ SoftEther VPN Client Manager has no “bypass Iran” checkbox. This project add
 
 ### این پروژه چیست؟
 
-وقتی SoftEther وصل می‌شود، ویندوز معمولاً یک مسیر پیش‌فرض روی آداپتور VPN می‌گذارد و **کل اینترنت** از تونل می‌رود. این اسکریپت رنج‌های IPv4 اعلام‌شدهٔ ایران را دانلود می‌کند و برایشان مسیر مشخص‌تری از **گیت‌وی شبکه محلی** می‌سازد. ترافیک خارجی همان VPN می‌ماند.
+وقتی یک VPN تمام‌تونل وصل می‌شود، ویندوز معمولاً مسیر پیش‌فرض را روی آداپتور VPN می‌گذارد و **کل اینترنت** از تونل می‌رود. این اسکریپت رنج‌های IPv4 اعلام‌شدهٔ ایران را دانلود می‌کند و برایشان مسیر مشخص‌تری از **گیت‌وی شبکه محلی** می‌سازد. ترافیک خارجی همان VPN می‌ماند.
+
+با SoftEther تست شده، ولی به تنظیمات خود VPN دست نمی‌زند؛ فقط جدول مسیر ویندوز را عوض می‌کند.
 
 ### پیش‌نیاز
 
 - ویندوز ۱۰ یا ۱۱
-- SoftEther VPN Client
+- هر VPN که ترافیک کل اینترنت را از تونل بفرستد (SoftEther، OpenVPN، WireGuard، AnyConnect و مشابه)
 - دسترسی Administrator (برای `route add` / `route delete`)
 - اینترنت برای دانلود لیست IP (بار اول و هر بار `Apply`)
 
@@ -59,7 +63,8 @@ https://raw.githubusercontent.com/farshidmousavii/iran-ip-ranges/main/dist/raw/i
 - اگر سایتی `.ir` باشد ولی روی CDN خارجی (مثلاً Cloudflare) باشد، هنوز از VPN می‌رود.
 - IPv6 پوشش داده نشده است.
 - گیت‌وی LAN به‌صورت خودکار از کارت Ethernet/Wi-Fi پیدا می‌شود. اگر لپ‌تاپ را به شبکهٔ دیگری ببرید، قبل از `Apply` دوباره یا یک‌بار `Remove` کنید.
-- این اسکریپت تنظیمات خود SoftEther را عوض نمی‌کند.
+- تنظیمات خود برنامهٔ VPN عوض نمی‌شود.
+- برای Clash / sing-box / v2ray از قانون دامنهٔ خودشان (`geosite:ir`) استفاده کنید.
 
 ### فایل‌ها
 
@@ -72,7 +77,7 @@ https://raw.githubusercontent.com/farshidmousavii/iran-ip-ranges/main/dist/raw/i
 
 لیست رنج‌های اعمال‌شده این‌جا ذخیره می‌شود تا `Remove` فقط همان‌ها را پاک کند:
 
-`%LOCALAPPDATA%\SoftEtherIranBypass\applied-cidrs.txt`
+`%LOCALAPPDATA%\IranDirectRoutes\applied-cidrs.txt`
 
 ### تست سریع
 
@@ -95,21 +100,23 @@ Find-NetRoute -RemoteIPAddress 217.218.127.127
 
 ### What this does
 
-SoftEther VPN Client Manager cannot exclude Iranian sites. A connected client usually installs a **default route** on the VPN adapter, so all IPv4 internet goes through the tunnel.
+Any full-tunnel VPN on Windows usually installs a **default route** on the VPN adapter, so all IPv4 internet goes through the tunnel. This script is VPN-agnostic: it only changes the Windows routing table.
 
 Windows prefers a **more-specific** route over `0.0.0.0/0`. This script:
 
-1. Detects the up physical adapter (skips VPN/TAP/Wintun).
-2. Finds that adapter’s LAN gateway (even when SoftEther has removed the LAN default route).
+1. Detects the up physical adapter (skips VPN/TAP/Wintun/WireGuard/OpenVPN/SoftEther).
+2. Finds that adapter’s LAN gateway (even when the VPN has removed the LAN default route).
 3. Downloads announced Iranian IPv4 CIDRs.
 4. Runs `route add … METRIC 5 IF <lan>` for each prefix.
 
 Foreign destinations keep using the VPN default route.
 
+Works with SoftEther, OpenVPN, WireGuard, AnyConnect, and similar clients. It does **not** replace Clash/sing-box/v2ray domain routing (`geosite:ir`).
+
 ### Requirements
 
 - Windows 10 or 11
-- SoftEther VPN Client
+- A VPN that sends all internet traffic through the tunnel
 - Administrator rights
 - Network access to GitHub (to fetch the prefix list)
 
@@ -142,9 +149,7 @@ Built from RIPE Stat country resource `IR` by [farshidmousavii/iran-ip-ranges](h
 - A `.ir` site hosted on a foreign CDN still goes through the VPN.
 - IPv6 is not handled.
 - If you change networks, run `Remove` then `Apply` again so the next hop matches the new gateway.
-- SoftEther’s own settings are left untouched.
-
-Domain-suffix split (`geosite:ir`, `DOMAIN-SUFFIX,.ir`) needs a hostname-aware client (Clash, sing-box, v2ray), not the Windows routing table.
+- The VPN app’s own settings are left untouched.
 
 ### Quick test
 
