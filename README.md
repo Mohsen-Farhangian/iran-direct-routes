@@ -14,11 +14,11 @@ This is **not** limited to SoftEther. It works with SoftEther, OpenVPN, WireGuar
 
 ### این پروژه چیست؟
 
-وقتی یک VPN تمام‌تونل وصل می‌شود، ویندوز معمولاً مسیر پیش‌فرض را روی آداپتور VPN می‌گذارد و **کل اینترنت** از تونل می‌رود. این اسکریپت رنج‌های IPv4 و IPv6 اعلام‌شدهٔ ایران را دانلود می‌کند و برایشان مسیر مشخص‌تری از **گیت‌وی شبکه محلی** می‌سازد. ترافیک خارجی همان VPN می‌ماند.
+وقتی VPN را روشن می‌کنید، معمولاً **همهٔ اینترنت** از داخل VPN رد می‌شود — حتی سایت‌های ایرانی.
 
-اگر روی کارت شبکه گیت‌وی IPv6 نباشد، مسیرهای IPv4 همچنان اعمال می‌شوند و IPv6 با پیام هشدار رد می‌شود.
+این اسکریپت کاری می‌کند که سایت‌ها و IPهای ایرانی از اینترنت معمولی خانه یا اداره بروند؛ ترافیک خارجی همان‌طور از VPN می‌ماند.
 
-با SoftEther تست شده، ولی به تنظیمات خود VPN دست نمی‌زند؛ فقط جدول مسیر ویندوز را عوض می‌کند.
+با خیلی از VPNهای تمام‌تونل روی ویندوز کار می‌کند (نه فقط SoftEther). تنظیمات خود برنامهٔ VPN را عوض نمی‌کند؛ فقط مسیرهای ویندوز را تنظیم می‌کند — هم IPv4 و هم IPv6 (اگر روی شبکه‌تان IPv6 باشد؛ وگرنه فقط IPv4 اعمال می‌شود و برای IPv6 هشدار می‌دهد).
 
 ### پیش‌نیاز
 
@@ -104,18 +104,13 @@ Find-NetRoute -RemoteIPAddress 217.218.127.127
 
 ### What this does
 
-Any full-tunnel VPN on Windows usually installs a **default route** on the VPN adapter, so all internet goes through the tunnel. This script is VPN-agnostic: it only changes the Windows routing table.
+When a VPN is on, Windows usually sends **all** internet traffic through the tunnel — including Iranian sites.
 
-Windows prefers a **more-specific** route over `0.0.0.0/0` or `::/0`. This script:
+This script sends Iranian sites and IP ranges over your normal home/office connection instead, while foreign traffic still uses the VPN.
 
-1. Detects the up physical adapter (skips VPN/TAP/Wintun/WireGuard/OpenVPN/SoftEther).
-2. Finds that adapter’s IPv4 (and IPv6, if any) LAN gateway.
-3. Downloads announced Iranian IPv4 and IPv6 CIDRs.
-4. Runs `route add` / `route -6 add` with `METRIC 5 IF <lan>` for each prefix.
+It works with many full-tunnel VPNs on Windows (not only SoftEther). It does **not** change the VPN app’s settings; it only adjusts Windows routes for announced Iranian IPv4 and IPv6 prefixes. If your LAN has no IPv6 gateway, IPv4 still applies and IPv6 is skipped with a warning.
 
-Foreign destinations keep using the VPN default route. If there is no IPv6 LAN gateway, IPv4 still applies and IPv6 is skipped with a warning.
-
-Works with SoftEther, OpenVPN, WireGuard, AnyConnect, and similar clients. It does **not** replace Clash/sing-box/v2ray domain routing (`geosite:ir`).
+How it works under the hood: it finds your physical LAN adapter and gateway, downloads Iranian IPv4/IPv6 CIDRs, then adds more-specific routes (`route add` / `route -6 add`) so those destinations bypass the VPN default route (`0.0.0.0/0` or `::/0`). It does **not** replace Clash/sing-box/v2ray domain routing (`geosite:ir`).
 
 ### Requirements
 
