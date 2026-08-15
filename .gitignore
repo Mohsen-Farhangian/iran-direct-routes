@@ -2,5 +2,7 @@ Thumbs.db
 Desktop.ini
 *.log
 applied-cidrs.txt
+applied-ipv4.txt
+applied-ipv6.txt
 .vscode/
 .idea/

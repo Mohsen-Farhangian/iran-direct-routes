@@ -33,12 +33,17 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$StateDir = Join-Path $env:LOCALAPPDATA 'IranDirectRoutes'
-$LegacyStateDir = Join-Path $env:LOCALAPPDATA 'SoftEtherIranBypass'
+# Current state lives next to this script (project folder).
+$StateDir = $PSScriptRoot
 $StateFileV4 = Join-Path $StateDir 'applied-ipv4.txt'
 $StateFileV6 = Join-Path $StateDir 'applied-ipv6.txt'
-$LegacyStateFile = Join-Path $LegacyStateDir 'applied-cidrs.txt'
-$LegacyStateFileAlt = Join-Path $StateDir 'applied-cidrs.txt'
+# Legacy locations (pre-project-folder state) — still read on Remove/Status.
+$LegacyAppDataDir = Join-Path $env:LOCALAPPDATA 'IranDirectRoutes'
+$LegacySoftEtherDir = Join-Path $env:LOCALAPPDATA 'SoftEtherIranBypass'
+$LegacyStateFileV4 = Join-Path $LegacyAppDataDir 'applied-ipv4.txt'
+$LegacyStateFileV6 = Join-Path $LegacyAppDataDir 'applied-ipv6.txt'
+$LegacyStateFileAlt = Join-Path $LegacyAppDataDir 'applied-cidrs.txt'
+$LegacyStateFile = Join-Path $LegacySoftEtherDir 'applied-cidrs.txt'
 $ListUrlV4 = 'https://raw.githubusercontent.com/farshidmousavii/iran-ip-ranges/main/dist/raw/ipv4.txt'
 $ListUrlV6 = 'https://raw.githubusercontent.com/farshidmousavii/iran-ip-ranges/main/dist/raw/ipv6.txt'
 $TaskName = 'Iran Direct Routes'
@@ -211,7 +216,6 @@ function Invoke-Apply {
     $gw4 = Get-LanGatewayV4 -Adapter $lan
     $cidrs4 = Get-IranCidrsV4
 
-    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
     Add-IranRoutesV4 -Adapter $lan -Gateway $gw4 -Cidrs $cidrs4
     Write-Host "IPv4 LAN gateway: $gw4"
 
@@ -229,7 +233,14 @@ function Invoke-Apply {
 
 function Get-StateFilesToRemove {
     $files = @()
-    foreach ($f in @($StateFileV4, $StateFileV6, $LegacyStateFileAlt, $LegacyStateFile)) {
+    foreach ($f in @(
+            $StateFileV4,
+            $StateFileV6,
+            $LegacyStateFileV4,
+            $LegacyStateFileV6,
+            $LegacyStateFileAlt,
+            $LegacyStateFile
+        )) {
         if ((Test-Path $f) -and ($files -notcontains $f)) {
             $files += $f
         }
@@ -318,10 +329,13 @@ function Invoke-Status {
     $v4 = 0
     $v6 = 0
     if (Test-Path $StateFileV4) { $v4 = (Get-Content $StateFileV4).Count }
+    elseif (Test-Path $LegacyStateFileV4) { $v4 = (Get-Content $LegacyStateFileV4).Count }
     elseif (Test-Path $LegacyStateFileAlt) { $v4 = (Get-Content $LegacyStateFileAlt | Where-Object { $_ -match '^\d' }).Count }
     elseif (Test-Path $LegacyStateFile) { $v4 = (Get-Content $LegacyStateFile | Where-Object { $_ -match '^\d' }).Count }
     if (Test-Path $StateFileV6) { $v6 = (Get-Content $StateFileV6).Count }
+    elseif (Test-Path $LegacyStateFileV6) { $v6 = (Get-Content $LegacyStateFileV6).Count }
     Write-Host "Applied Iran prefixes on file: IPv4=$v4 IPv6=$v6"
+    Write-Host "State folder: $StateDir"
 }
 
 if (-not (Test-Admin)) {

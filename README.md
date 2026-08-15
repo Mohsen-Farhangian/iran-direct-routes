@@ -78,10 +78,12 @@ powershell -ExecutionPolicy Bypass -File .\IranDirect.ps1 -Action Status
 | `Remove-IranDirect.cmd` | حذف مسیرها |
 | `Install-LogonTask.cmd` | تسک زمان‌بندی‌شده هنگام ورود به ویندوز |
 
-لیست رنج‌های اعمال‌شده این‌جا ذخیره می‌شود تا `Remove` فقط همان‌ها را پاک کند:
+لیست رنج‌های اعمال‌شده کنار اسکریپت (همان پوشهٔ پروژه) ذخیره می‌شود تا `Remove` فقط همان‌ها را پاک کند:
 
-- `%LOCALAPPDATA%\IranDirectRoutes\applied-ipv4.txt`
-- `%LOCALAPPDATA%\IranDirectRoutes\applied-ipv6.txt`
+- `applied-ipv4.txt`
+- `applied-ipv6.txt`
+
+اگر قبلاً از نسخهٔ قدیمی استفاده کرده‌اید، `Remove` هنوز فایل‌های قدیمی در `%LOCALAPPDATA%\IranDirectRoutes` و `%LOCALAPPDATA%\SoftEtherIranBypass` را هم می‌خواند و مسیرها را پاک می‌کند؛ بعد از `Apply` جدید، فقط فایل‌های کنار پروژه به‌روز می‌شوند.
 
 ### تست سریع
 
@@ -150,6 +152,15 @@ Built from RIPE Stat country resource `IR` by [farshidmousavii/iran-ip-ranges](h
 - IPv6 is applied only when an IPv6 LAN gateway exists.
 - If you change networks, run `Remove` then `Apply` again so the next hop matches the new gateway.
 - The VPN app’s own settings are left untouched.
+
+### State files
+
+Apply writes the lists of routes it added next to `IranDirect.ps1`:
+
+- `applied-ipv4.txt`
+- `applied-ipv6.txt`
+
+Remove deletes only those recorded prefixes. It also still reads legacy lists under `%LOCALAPPDATA%\IranDirectRoutes` and `%LOCALAPPDATA%\SoftEtherIranBypass` so an older install can be cleaned up. New Applies always write state in the project folder.
 
 ### Quick test
 
