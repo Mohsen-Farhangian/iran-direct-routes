@@ -1,25 +1,28 @@
 #Requires -RunAsAdministrator
 <#
 .SYNOPSIS
-  Send Iranian IPv4 prefixes through the local LAN gateway so they skip any full-tunnel VPN.
+  Send Iranian IPv4/IPv6 prefixes through the local LAN gateway so they skip any full-tunnel VPN.
 
 .DESCRIPTION
   When a VPN (SoftEther, OpenVPN, WireGuard, AnyConnect, etc.) is connected, Windows
   typically has a default route via the VPN adapter. This script downloads announced
-  Iran IPv4 prefixes and adds more-specific routes via the physical LAN/Wi-Fi gateway.
-  Foreign traffic keeps using the VPN default route. Works on the Windows routing table;
-  it does not change the VPN app itself.
+  Iran IPv4 and IPv6 prefixes and adds more-specific routes via the physical LAN/Wi-Fi
+  gateway. Foreign traffic keeps using the VPN default route. Works on the Windows
+  routing table; it does not change the VPN app itself.
+
+  IPv6 routes are applied only when an IPv6 LAN gateway is available. If the NIC has
+  no IPv6 gateway, Apply still succeeds for IPv4 and skips IPv6 with a warning.
 
 .PARAMETER Action
-  Apply          Add Iran-direct routes (download fresh prefix list).
+  Apply          Add Iran-direct routes (download fresh prefix lists).
   Remove         Delete routes recorded from the last Apply.
   InstallTask    Register a logon scheduled task that runs Apply.
   UninstallTask  Remove that scheduled task.
-  Status         Show LAN gateway, default routes, and applied prefix count.
+  Status         Show LAN gateways, default routes, and applied prefix counts.
 
 .NOTES
   Routes are not persistent across reboot. Re-run Apply after restart, or InstallTask.
-  Requires Administrator. Prefix list: https://github.com/farshidmousavii/iran-ip-ranges
+  Requires Administrator. Prefix lists: https://github.com/farshidmousavii/iran-ip-ranges
 #>
 
 [CmdletBinding()]
@@ -32,9 +35,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $StateDir = Join-Path $env:LOCALAPPDATA 'IranDirectRoutes'
 $LegacyStateDir = Join-Path $env:LOCALAPPDATA 'SoftEtherIranBypass'
-$StateFile = Join-Path $StateDir 'applied-cidrs.txt'
+$StateFileV4 = Join-Path $StateDir 'applied-ipv4.txt'
+$StateFileV6 = Join-Path $StateDir 'applied-ipv6.txt'
 $LegacyStateFile = Join-Path $LegacyStateDir 'applied-cidrs.txt'
-$ListUrl = 'https://raw.githubusercontent.com/farshidmousavii/iran-ip-ranges/main/dist/raw/ipv4.txt'
+$LegacyStateFileAlt = Join-Path $StateDir 'applied-cidrs.txt'
+$ListUrlV4 = 'https://raw.githubusercontent.com/farshidmousavii/iran-ip-ranges/main/dist/raw/ipv4.txt'
+$ListUrlV6 = 'https://raw.githubusercontent.com/farshidmousavii/iran-ip-ranges/main/dist/raw/ipv6.txt'
 $TaskName = 'Iran Direct Routes'
 $LegacyTaskName = 'SoftEther Iran Direct Routes'
 
@@ -63,7 +69,7 @@ function Get-LanAdapter {
     return $adapters | Select-Object -First 1
 }
 
-function Get-LanGateway {
+function Get-LanGatewayV4 {
     param($Adapter)
 
     $default = Get-NetRoute -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -73,14 +79,37 @@ function Get-LanGateway {
 
     $hops = Get-NetRoute -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         Where-Object { $_.NextHop -ne '0.0.0.0' }
-    if (-not $hops) { throw "Could not find LAN gateway on adapter $($Adapter.Name)." }
+    if (-not $hops) { throw "Could not find IPv4 LAN gateway on adapter $($Adapter.Name)." }
 
     return ($hops | Group-Object NextHop | Sort-Object Count -Descending | Select-Object -First 1).Name
 }
 
-function Get-IranCidrs {
+function Get-LanGatewayV6 {
+    param($Adapter)
+
+    $default = Get-NetRoute -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.DestinationPrefix -eq '::/0' -and
+            $_.NextHop -and
+            $_.NextHop -ne '::'
+        } |
+        Select-Object -First 1
+    if ($default) { return $default.NextHop }
+
+    $hops = Get-NetRoute -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+        Where-Object {
+            $_.NextHop -and
+            $_.NextHop -ne '::' -and
+            $_.DestinationPrefix -ne 'ff00::/8'
+        }
+    if (-not $hops) { return $null }
+
+    return ($hops | Group-Object NextHop | Sort-Object Count -Descending | Select-Object -First 1).Name
+}
+
+function Get-IranCidrsV4 {
     Write-Host "Downloading Iran IPv4 prefixes..."
-    $text = (Invoke-WebRequest -Uri $ListUrl -UseBasicParsing -TimeoutSec 60).Content
+    $text = (Invoke-WebRequest -Uri $ListUrlV4 -UseBasicParsing -TimeoutSec 60).Content
     $cidrs = @()
     foreach ($line in ($text -split "`n")) {
         $t = $line.Trim()
@@ -88,30 +117,42 @@ function Get-IranCidrs {
             $cidrs += $t
         }
     }
-    if ($cidrs.Count -lt 50) { throw "Iran prefix list looks empty or invalid ($($cidrs.Count) entries)." }
-    Write-Host "Loaded $($cidrs.Count) prefixes."
+    if ($cidrs.Count -lt 50) { throw "Iran IPv4 prefix list looks empty or invalid ($($cidrs.Count) entries)." }
+    Write-Host "Loaded $($cidrs.Count) IPv4 prefixes."
     return $cidrs
 }
 
-function Invoke-Apply {
-    $lan = Get-LanAdapter
-    $gw = Get-LanGateway -Adapter $lan
-    $cidrs = Get-IranCidrs
+function Get-IranCidrsV6 {
+    Write-Host "Downloading Iran IPv6 prefixes..."
+    $text = (Invoke-WebRequest -Uri $ListUrlV6 -UseBasicParsing -TimeoutSec 60).Content
+    $cidrs = @()
+    foreach ($line in ($text -split "`n")) {
+        $t = $line.Trim()
+        if ($t -match '^[0-9a-fA-F:]+/\d{1,3}$') {
+            $cidrs += $t
+        }
+    }
+    if ($cidrs.Count -lt 10) { throw "Iran IPv6 prefix list looks empty or invalid ($($cidrs.Count) entries)." }
+    Write-Host "Loaded $($cidrs.Count) IPv6 prefixes."
+    return $cidrs
+}
 
-    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+function Add-IranRoutesV4 {
+    param($Adapter, [string]$Gateway, [string[]]$Cidrs)
+
     $applied = New-Object System.Collections.Generic.List[string]
     $ok = 0
     $skip = 0
     $fail = 0
     $n = 0
 
-    Write-Host "Adding routes via $gw on $($lan.Name) (ifIndex $($lan.ifIndex))..."
-    foreach ($cidr in $cidrs) {
+    Write-Host "Adding IPv4 routes via $Gateway on $($Adapter.Name) (ifIndex $($Adapter.ifIndex))..."
+    foreach ($cidr in $Cidrs) {
         $n++
-        if ($n % 200 -eq 0) { Write-Host "  $n / $($cidrs.Count)" }
+        if ($n % 200 -eq 0) { Write-Host "  IPv4 $n / $($Cidrs.Count)" }
         $ip, $len = $cidr.Split('/')
         $mask = Convert-CidrToMask -PrefixLength ([int]$len)
-        $out = & route.exe add $ip mask $mask $gw METRIC 5 IF $lan.ifIndex 2>&1 | Out-String
+        $out = & route.exe add $ip mask $mask $Gateway METRIC 5 IF $Adapter.ifIndex 2>&1 | Out-String
         if ($LASTEXITCODE -eq 0 -or $out -match 'already exists|The object already exists|The route addition failed: The object already exists') {
             $applied.Add($cidr) | Out-Null
             if ($out -match 'already exists|The object already exists') { $skip++ } else { $ok++ }
@@ -120,37 +161,118 @@ function Invoke-Apply {
         }
     }
 
-    $applied | Set-Content -Path $StateFile -Encoding ASCII
-    Write-Host "Done. added=$ok already-present=$skip failed=$fail"
-    Write-Host "State: $StateFile"
-    Write-Host "LAN gateway: $gw"
+    $applied | Set-Content -Path $StateFileV4 -Encoding ASCII
+    Write-Host "IPv4 done. added=$ok already-present=$skip failed=$fail"
+    Write-Host "IPv4 state: $StateFileV4"
 }
 
-function Get-AppliedStateFile {
-    if (Test-Path $StateFile) { return $StateFile }
-    if (Test-Path $LegacyStateFile) { return $LegacyStateFile }
-    return $null
+function Add-IranRoutesV6 {
+    param($Adapter, [string]$Gateway, [string[]]$Cidrs)
+
+    $applied = New-Object System.Collections.Generic.List[string]
+    $ok = 0
+    $skip = 0
+    $fail = 0
+    $n = 0
+
+    Write-Host "Adding IPv6 routes via $Gateway on $($Adapter.Name) (ifIndex $($Adapter.ifIndex))..."
+    foreach ($cidr in $Cidrs) {
+        $n++
+        if ($n % 200 -eq 0) { Write-Host "  IPv6 $n / $($Cidrs.Count)" }
+        $out = & route.exe -6 add $cidr $Gateway METRIC 5 IF $Adapter.ifIndex 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0 -or $out -match 'already exists|The object already exists|The route addition failed: The object already exists') {
+            $applied.Add($cidr) | Out-Null
+            if ($out -match 'already exists|The object already exists') { $skip++ } else { $ok++ }
+        } else {
+            # Fallback: New-NetRoute (some Windows builds prefer this for IPv6)
+            try {
+                $existing = Get-NetRoute -DestinationPrefix $cidr -InterfaceIndex $Adapter.ifIndex -AddressFamily IPv6 -ErrorAction SilentlyContinue
+                if ($existing) {
+                    $applied.Add($cidr) | Out-Null
+                    $skip++
+                } else {
+                    New-NetRoute -DestinationPrefix $cidr -InterfaceIndex $Adapter.ifIndex -NextHop $Gateway -RouteMetric 5 -ErrorAction Stop | Out-Null
+                    $applied.Add($cidr) | Out-Null
+                    $ok++
+                }
+            } catch {
+                $fail++
+            }
+        }
+    }
+
+    $applied | Set-Content -Path $StateFileV6 -Encoding ASCII
+    Write-Host "IPv6 done. added=$ok already-present=$skip failed=$fail"
+    Write-Host "IPv6 state: $StateFileV6"
+}
+
+function Invoke-Apply {
+    $lan = Get-LanAdapter
+    $gw4 = Get-LanGatewayV4 -Adapter $lan
+    $cidrs4 = Get-IranCidrsV4
+
+    New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
+    Add-IranRoutesV4 -Adapter $lan -Gateway $gw4 -Cidrs $cidrs4
+    Write-Host "IPv4 LAN gateway: $gw4"
+
+    $gw6 = Get-LanGatewayV6 -Adapter $lan
+    if (-not $gw6) {
+        Write-Host "IPv6 skipped: no IPv6 LAN gateway on $($lan.Name). Enable IPv6 on the NIC/router, then run Apply again."
+        if (Test-Path $StateFileV6) { Remove-Item $StateFileV6 -Force -ErrorAction SilentlyContinue }
+        return
+    }
+
+    $cidrs6 = Get-IranCidrsV6
+    Add-IranRoutesV6 -Adapter $lan -Gateway $gw6 -Cidrs $cidrs6
+    Write-Host "IPv6 LAN gateway: $gw6"
+}
+
+function Get-StateFilesToRemove {
+    $files = @()
+    foreach ($f in @($StateFileV4, $StateFileV6, $LegacyStateFileAlt, $LegacyStateFile)) {
+        if ((Test-Path $f) -and ($files -notcontains $f)) {
+            $files += $f
+        }
+    }
+    return $files
 }
 
 function Invoke-Remove {
-    $file = Get-AppliedStateFile
-    if (-not $file) {
+    $files = Get-StateFilesToRemove
+    if (-not $files -or $files.Count -eq 0) {
         Write-Host "No applied-route list found. Nothing to remove."
         return
     }
-    $cidrs = Get-Content $file | Where-Object { $_ -match '^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$' }
-    $n = 0
-    $ok = 0
-    foreach ($cidr in $cidrs) {
-        $n++
-        if ($n % 200 -eq 0) { Write-Host "  removing $n / $($cidrs.Count)" }
-        $ip, $len = $cidr.Split('/')
-        $mask = Convert-CidrToMask -PrefixLength ([int]$len)
-        & route.exe delete $ip mask $mask | Out-Null
-        if ($LASTEXITCODE -eq 0) { $ok++ }
+
+    $ok4 = 0
+    $ok6 = 0
+    foreach ($file in $files) {
+        $cidrs = Get-Content $file | Where-Object { $_.Trim() -ne '' }
+        $n = 0
+        foreach ($cidr in $cidrs) {
+            $n++
+            if ($n % 200 -eq 0) { Write-Host "  removing $n from $(Split-Path $file -Leaf)" }
+            if ($cidr -match '^\d{1,3}(\.\d{1,3}){3}/\d{1,2}$') {
+                $ip, $len = $cidr.Split('/')
+                $mask = Convert-CidrToMask -PrefixLength ([int]$len)
+                & route.exe delete $ip mask $mask | Out-Null
+                if ($LASTEXITCODE -eq 0) { $ok4++ }
+            } elseif ($cidr -match '^[0-9a-fA-F:]+/\d{1,3}$') {
+                & route.exe -6 delete $cidr | Out-Null
+                if ($LASTEXITCODE -eq 0) {
+                    $ok6++
+                } else {
+                    try {
+                        Get-NetRoute -DestinationPrefix $cidr -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+                            Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+                        $ok6++
+                    } catch { }
+                }
+            }
+        }
+        Remove-Item $file -Force -ErrorAction SilentlyContinue
     }
-    Remove-Item $file -Force -ErrorAction SilentlyContinue
-    Write-Host "Removed $ok routes."
+    Write-Host "Removed IPv4=$ok4 IPv6=$ok6 routes."
 }
 
 function Invoke-InstallTask {
@@ -174,20 +296,32 @@ function Invoke-UninstallTask {
 
 function Invoke-Status {
     $lan = Get-LanAdapter
-    $gw = Get-LanGateway -Adapter $lan
-    $defaults = Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+    $gw4 = Get-LanGatewayV4 -Adapter $lan
+    $gw6 = Get-LanGatewayV6 -Adapter $lan
+    $defaults4 = Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue |
         Where-Object { $_.DestinationPrefix -eq '0.0.0.0/0' }
+    $defaults6 = Get-NetRoute -AddressFamily IPv6 -ErrorAction SilentlyContinue |
+        Where-Object { $_.DestinationPrefix -eq '::/0' }
+
     Write-Host "LAN adapter : $($lan.Name) ifIndex=$($lan.ifIndex)"
-    Write-Host "LAN gateway : $gw"
-    Write-Host "Default routes:"
-    $defaults | Format-Table DestinationPrefix, NextHop, InterfaceAlias, RouteMetric -AutoSize | Out-String | Write-Host
-    $file = Get-AppliedStateFile
-    if ($file) {
-        $c = (Get-Content $file).Count
-        Write-Host "Applied Iran prefixes on file: $c"
+    Write-Host "IPv4 gateway: $gw4"
+    if ($gw6) { Write-Host "IPv6 gateway: $gw6" } else { Write-Host "IPv6 gateway: (none)" }
+    Write-Host "IPv4 default routes:"
+    $defaults4 | Format-Table DestinationPrefix, NextHop, InterfaceAlias, RouteMetric -AutoSize | Out-String | Write-Host
+    Write-Host "IPv6 default routes:"
+    if ($defaults6) {
+        $defaults6 | Format-Table DestinationPrefix, NextHop, InterfaceAlias, RouteMetric -AutoSize | Out-String | Write-Host
     } else {
-        Write-Host "No Iran-direct routes recorded yet."
+        Write-Host "(none)"
     }
+
+    $v4 = 0
+    $v6 = 0
+    if (Test-Path $StateFileV4) { $v4 = (Get-Content $StateFileV4).Count }
+    elseif (Test-Path $LegacyStateFileAlt) { $v4 = (Get-Content $LegacyStateFileAlt | Where-Object { $_ -match '^\d' }).Count }
+    elseif (Test-Path $LegacyStateFile) { $v4 = (Get-Content $LegacyStateFile | Where-Object { $_ -match '^\d' }).Count }
+    if (Test-Path $StateFileV6) { $v6 = (Get-Content $StateFileV6).Count }
+    Write-Host "Applied Iran prefixes on file: IPv4=$v4 IPv6=$v6"
 }
 
 if (-not (Test-Admin)) {
